@@ -63,6 +63,7 @@ const OBSTACLE_COLLISION_LAYER := 1 << 2
 var _noise := FastNoiseLite.new()
 var _river: Curve3D = null
 var _military_blockers: Array[Dictionary] = []
+var _cover_zones: Array[Dictionary] = []
 
 
 func _set_regenerate(_v: bool) -> void:
@@ -167,6 +168,53 @@ func bridge_walk_y(x: float, z: float) -> float:
 	if bridge.is_empty():
 		return height_at(x, z)
 	return bridge["deck_y"]
+
+
+func cover_visibility_multiplier(pos: Vector3, stance: int) -> float:
+	var multiplier := 1.0
+	var x := pos.x
+	var z := pos.z
+	var crouched := stance == 2
+	var prone := stance == 3
+	for zone in _cover_zones:
+		var center: Vector2 = zone["center"]
+		var radius: float = zone["radius"]
+		var dist := Vector2(x, z).distance_to(center)
+		if dist <= radius:
+			var zone_multiplier: float = zone["multiplier"]
+			if prone:
+				zone_multiplier = maxf(0.28, zone_multiplier - 0.12)
+			elif crouched:
+				zone_multiplier = maxf(0.36, zone_multiplier - 0.06)
+			multiplier = minf(multiplier, zone_multiplier)
+	if crouched or prone:
+		if _inside_grass_cover(x, z):
+			multiplier = minf(multiplier, 0.58 if prone else 0.78)
+		if _near_tree_cover(x, z):
+			multiplier = minf(multiplier, 0.46 if prone else 0.66)
+	return multiplier
+
+
+func _inside_grass_cover(x: float, z: float) -> bool:
+	if absf(x) > grass_area or absf(z) > grass_area:
+		return false
+	if _river != null and river_dist(x, z) <= river_width * 0.5 + 1.2:
+		return false
+	return height_at(x, z) > water_level + 0.4
+
+
+func _near_tree_cover(x: float, z: float) -> bool:
+	var trees := get_node_or_null("Trees")
+	if trees == null:
+		return false
+	var p := Vector2(x, z)
+	for child in trees.get_children():
+		if not child is Node3D:
+			continue
+		var tree := child as Node3D
+		if p.distance_to(Vector2(tree.global_position.x, tree.global_position.z)) <= 4.2:
+			return true
+	return false
 
 
 func generate() -> void:
@@ -404,6 +452,7 @@ func _get_bridge_nav_data() -> Dictionary:
 
 func _build_military_props() -> void:
 	_military_blockers.clear()
+	_cover_zones.clear()
 	var existing := get_node_or_null("MilitaryProps")
 	if existing != null:
 		remove_child(existing)
@@ -444,6 +493,11 @@ func _build_military_props() -> void:
 	_create_hedgehog(root, _military_land_point(Vector3(11, 0, -17)), deg_to_rad(-20.0), mats, "HedgehogRoadA")
 	_create_hedgehog(root, _military_land_point(Vector3(27, 0, -14)), deg_to_rad(36.0), mats, "HedgehogRoadB")
 
+	_create_watchtower(root, _military_land_point(Vector3(-34, 0, -33)), deg_to_rad(44.0), mats, "WatchtowerNorthWest")
+	_create_watchtower(root, _military_land_point(Vector3(39, 0, -9)), deg_to_rad(-126.0), mats, "WatchtowerEast")
+	_create_generator(root, _military_land_point(Vector3(-18, 0, -32)), deg_to_rad(8.0), mats, "GeneratorNest")
+	_create_gate(root, _military_land_point(Vector3(3, 0, -24)), deg_to_rad(48.0), mats, "BaseGate")
+
 	_create_alarm_post(root, _military_land_point(Vector3(-5, 0, -33)), deg_to_rad(20.0), mats, "AlarmNest")
 	_create_alarm_post(root, _military_land_point(Vector3(29, 0, -9)), deg_to_rad(-35.0), mats, "AlarmRoad")
 
@@ -455,7 +509,12 @@ func _military_materials() -> Dictionary:
 		"wire": _military_mat(Color(0.58, 0.61, 0.58), 0.45),
 		"concrete": _military_mat(Color(0.52, 0.55, 0.50), 0.9),
 		"sand": _military_mat(Color(0.62, 0.55, 0.38), 0.86),
+		"wood": _military_mat(Color(0.31, 0.25, 0.17), 0.82),
+		"roof": _military_mat(Color(0.18, 0.22, 0.19), 0.75),
+		"generator_green": _military_mat(Color(0.18, 0.27, 0.18), 0.68),
+		"lamp_glass": _military_mat(Color(1.0, 0.82, 0.36), 0.28, Color(1.0, 0.68, 0.18), 1.2),
 		"warning_red": _military_mat(Color(0.86, 0.08, 0.05), 0.55, Color(0.9, 0.05, 0.03), 0.35),
+		"warning_yellow": _military_mat(Color(0.95, 0.70, 0.12), 0.5),
 		"paint_white": _military_mat(Color(0.88, 0.86, 0.78), 0.6),
 		"sign": _military_mat(Color(0.08, 0.12, 0.11), 0.65),
 		"beacon": _military_mat(Color(1.0, 0.05, 0.03), 0.35, Color(1.0, 0.03, 0.02), 1.6),
@@ -543,6 +602,7 @@ func _create_barbed_fence_line(root: Node3D, raw_start: Vector3, raw_end: Vector
 	if military_collision_enabled:
 		var mid := (start + end) * 0.5 + Vector3.UP * (military_fence_height * 0.5)
 		_add_collision_box(root, "%sCollision" % fence_name, mid, Vector3(length, military_fence_height, 0.35), _yaw_for_x_axis(dir))
+		_register_cover_zone(mid, maxf(2.2, length * 0.18), 0.72)
 
 
 func _create_concrete_barrier(root: Node3D, pos: Vector3, yaw: float, mats: Dictionary, barrier_name: String) -> void:
@@ -552,6 +612,7 @@ func _create_concrete_barrier(root: Node3D, pos: Vector3, yaw: float, mats: Dict
 	for i in range(3):
 		var stripe_pos := pos + Vector3.UP * 0.78 + side + (Basis(Vector3.UP, yaw) * Vector3(-0.78 + i * 0.78, 0.0, 0.0))
 		_add_box(root, "%sMark%d" % [barrier_name, i], stripe_pos, Vector3(0.34, 0.28, 0.035), mats["paint_white"], yaw, false)
+	_register_cover_zone(pos, 2.3, 0.62)
 
 
 func _create_sandbag_wall(root: Node3D, center: Vector3, axis: Vector3, mats: Dictionary, wall_name: String) -> void:
@@ -565,6 +626,7 @@ func _create_sandbag_wall(root: Node3D, center: Vector3, axis: Vector3, mats: Di
 			_add_capsule_between(root, "%sBag" % wall_name, a, b, 0.18, mats["sand"])
 	if military_collision_enabled:
 		_add_collision_box(root, "%sCollision" % wall_name, center + Vector3.UP * 0.45, Vector3(5.4, 0.9, 0.65), _yaw_for_x_axis(dir))
+	_register_cover_zone(center, 3.2, 0.48)
 
 
 func _create_hedgehog(root: Node3D, pos: Vector3, yaw: float, mats: Dictionary, hedgehog_name: String) -> void:
@@ -579,6 +641,109 @@ func _create_hedgehog(root: Node3D, pos: Vector3, yaw: float, mats: Dictionary, 
 	_add_cylinder_between(root, "%sBeamDiagB" % hedgehog_name, diag_c, diag_d, 0.09, mats["metal"], 6)
 	if military_collision_enabled:
 		_add_collision_box(root, "%sCollision" % hedgehog_name, pos + Vector3.UP * 0.65, Vector3(2.1, 1.3, 2.1), yaw)
+	_register_cover_zone(pos, 2.0, 0.82)
+
+
+func _create_watchtower(root: Node3D, pos: Vector3, yaw: float, mats: Dictionary, tower_name: String) -> void:
+	var tower := Node3D.new()
+	tower.name = tower_name
+	tower.position = pos
+	tower.rotation.y = yaw
+	root.add_child(tower)
+
+	var post_offsets := [
+		Vector3(-1.15, 0.0, -0.95),
+		Vector3(1.15, 0.0, -0.95),
+		Vector3(-1.15, 0.0, 0.95),
+		Vector3(1.15, 0.0, 0.95),
+	]
+	for i in range(post_offsets.size()):
+		_add_box(tower, "%sPost%d" % [tower_name, i], post_offsets[i] + Vector3.UP * 1.55, Vector3(0.18, 3.1, 0.18), mats["wood"], 0.0, false)
+	_add_box(tower, "%sPlatform" % tower_name, Vector3(0.0, 3.05, 0.0), Vector3(2.8, 0.24, 2.35), mats["wood"], 0.0, false)
+	_add_box(tower, "%sCabinBack" % tower_name, Vector3(0.0, 3.72, 0.82), Vector3(2.55, 1.15, 0.18), mats["wood"], 0.0, false)
+	_add_box(tower, "%sCabinLeft" % tower_name, Vector3(-1.23, 3.62, -0.1), Vector3(0.14, 0.9, 1.72), mats["wood"], 0.0, false)
+	_add_box(tower, "%sCabinRight" % tower_name, Vector3(1.23, 3.62, -0.1), Vector3(0.14, 0.9, 1.72), mats["wood"], 0.0, false)
+	_add_box(tower, "%sRoof" % tower_name, Vector3(0.0, 4.45, 0.0), Vector3(3.15, 0.18, 2.7), mats["roof"], 0.0, false)
+	_add_box(tower, "%sFrontRail" % tower_name, Vector3(0.0, 3.72, -1.05), Vector3(2.7, 0.12, 0.12), mats["dark_metal"], 0.0, false)
+	_add_box(tower, "%sLeftRail" % tower_name, Vector3(-1.28, 3.72, 0.0), Vector3(0.12, 0.12, 2.1), mats["dark_metal"], 0.0, false)
+	_add_box(tower, "%sRightRail" % tower_name, Vector3(1.28, 3.72, 0.0), Vector3(0.12, 0.12, 2.1), mats["dark_metal"], 0.0, false)
+	for step in range(5):
+		_add_box(tower, "%sLadderStep%d" % [tower_name, step], Vector3(-1.48, 0.65 + step * 0.45, 0.82), Vector3(0.55, 0.06, 0.07), mats["metal"], 0.0, false)
+
+	var spotlight := Node3D.new()
+	spotlight.name = "%sSearchlight" % tower_name
+	spotlight.position = Vector3(0.0, 3.76, -1.22)
+	var script := load("res://entities/props/rotating_spotlight.gd")
+	if script != null:
+		spotlight.set_script(script)
+	tower.add_child(spotlight)
+	_add_box(spotlight, "%sSearchlightBody" % tower_name, Vector3(0.0, 0.0, -0.18), Vector3(0.58, 0.32, 0.44), mats["dark_metal"], 0.0, false)
+	_add_box(spotlight, "%sSearchlightLens" % tower_name, Vector3(0.0, 0.0, -0.43), Vector3(0.42, 0.22, 0.05), mats["lamp_glass"], 0.0, false)
+	var lamp := SpotLight3D.new()
+	lamp.name = "Lamp"
+	lamp.light_color = Color(1.0, 0.82, 0.45)
+	lamp.light_energy = 3.0
+	lamp.spot_range = 28.0
+	lamp.spot_angle = 26.0
+	lamp.shadow_enabled = true
+	lamp.rotation_degrees.x = -32.0
+	spotlight.add_child(lamp)
+
+	if military_collision_enabled:
+		_add_collision_box(root, "%sFootprintCollision" % tower_name, pos + Vector3.UP * 1.0, Vector3(2.8, 2.0, 2.4), yaw)
+	_register_cover_zone(pos, 3.1, 0.55)
+
+
+func _create_generator(root: Node3D, pos: Vector3, yaw: float, mats: Dictionary, generator_name: String) -> void:
+	var generator := Node3D.new()
+	generator.name = generator_name
+	generator.position = pos
+	generator.rotation.y = yaw
+	root.add_child(generator)
+
+	_add_box(generator, "%sMain" % generator_name, Vector3(0.0, 0.62, 0.0), Vector3(2.8, 1.15, 1.55), mats["generator_green"], 0.0, false)
+	_add_box(generator, "%sTop" % generator_name, Vector3(0.0, 1.28, 0.0), Vector3(2.55, 0.22, 1.32), mats["metal"], 0.0, false)
+	_add_box(generator, "%sVentA" % generator_name, Vector3(-0.72, 0.68, -0.8), Vector3(0.12, 0.56, 0.06), mats["dark_metal"], 0.0, false)
+	_add_box(generator, "%sVentB" % generator_name, Vector3(-0.28, 0.68, -0.8), Vector3(0.12, 0.56, 0.06), mats["dark_metal"], 0.0, false)
+	_add_box(generator, "%sVentC" % generator_name, Vector3(0.16, 0.68, -0.8), Vector3(0.12, 0.56, 0.06), mats["dark_metal"], 0.0, false)
+	_add_box(generator, "%sWarningStripeA" % generator_name, Vector3(1.16, 0.68, -0.81), Vector3(0.5, 0.12, 0.07), mats["warning_yellow"], deg_to_rad(18.0), false)
+	_add_box(generator, "%sWarningStripeB" % generator_name, Vector3(0.72, 0.68, -0.81), Vector3(0.5, 0.12, 0.07), mats["warning_yellow"], deg_to_rad(18.0), false)
+	_add_vertical_cylinder(generator, "%sExhaustPipe" % generator_name, Vector3(1.25, 1.22, 0.45), 0.83, 0.08, mats["dark_metal"], 10)
+	var status_light := OmniLight3D.new()
+	status_light.name = "StatusLight"
+	status_light.light_color = Color(0.1, 1.0, 0.35)
+	status_light.light_energy = 0.7
+	status_light.omni_range = 4.0
+	status_light.position = Vector3(-1.22, 1.25, -0.58)
+	generator.add_child(status_light)
+
+	if military_collision_enabled:
+		_add_collision_box(root, "%sCollision" % generator_name, pos + Vector3.UP * 0.7, Vector3(3.0, 1.4, 1.8), yaw)
+	_register_cover_zone(pos, 3.0, 0.58)
+
+
+func _create_gate(root: Node3D, pos: Vector3, yaw: float, mats: Dictionary, gate_name: String) -> void:
+	var gate := Node3D.new()
+	gate.name = gate_name
+	gate.position = pos
+	gate.rotation.y = yaw
+	root.add_child(gate)
+
+	_add_box(gate, "%sLeftPost" % gate_name, Vector3(-2.45, 1.25, 0.0), Vector3(0.36, 2.5, 0.36), mats["dark_metal"], 0.0, false)
+	_add_box(gate, "%sRightPost" % gate_name, Vector3(2.45, 1.25, 0.0), Vector3(0.36, 2.5, 0.36), mats["dark_metal"], 0.0, false)
+	_add_box(gate, "%sTopBeam" % gate_name, Vector3(0.0, 2.55, 0.0), Vector3(5.2, 0.18, 0.18), mats["metal"], 0.0, false)
+	_add_box(gate, "%sLeftOpenArm" % gate_name, Vector3(-3.55, 1.16, -0.55), Vector3(2.55, 0.18, 0.18), mats["paint_white"], deg_to_rad(-28.0), false)
+	_add_box(gate, "%sRightOpenArm" % gate_name, Vector3(3.55, 1.16, -0.55), Vector3(2.55, 0.18, 0.18), mats["paint_white"], deg_to_rad(28.0), false)
+	for i in range(4):
+		_add_box(gate, "%sTopWire%d" % [gate_name, i], Vector3(-1.8 + float(i) * 1.2, 2.9, 0.0), Vector3(0.08, 0.42, 0.08), mats["wire"], deg_to_rad(24.0), false)
+
+	var basis := Basis(Vector3.UP, yaw)
+	_create_warning_sign(root, _military_land_point(pos + basis * Vector3(0.0, 0.0, -1.35)), yaw, mats, "STOP", "%sStopSign" % gate_name)
+	if military_collision_enabled:
+		_add_collision_box(root, "%sLeftPostCollision" % gate_name, pos + basis * Vector3(-2.45, 1.25, 0.0), Vector3(0.55, 2.5, 0.55), yaw)
+		_add_collision_box(root, "%sRightPostCollision" % gate_name, pos + basis * Vector3(2.45, 1.25, 0.0), Vector3(0.55, 2.5, 0.55), yaw)
+	_register_cover_zone(pos + basis * Vector3(-2.45, 0.0, 0.0), 1.7, 0.64)
+	_register_cover_zone(pos + basis * Vector3(2.45, 0.0, 0.0), 1.7, 0.64)
 
 
 func _create_alarm_post(root: Node3D, pos: Vector3, yaw: float, mats: Dictionary, alarm_name: String) -> void:
@@ -593,7 +758,7 @@ func _create_alarm_post(root: Node3D, pos: Vector3, yaw: float, mats: Dictionary
 	alarm.rotation.y = yaw
 	root.add_child(alarm)
 	if alarm.has_method("configure"):
-		alarm.call("configure", 4.5, 24.0, 5.0)
+		alarm.call("configure", 4.5, 34.0, 5.0)
 	var shape := CollisionShape3D.new()
 	var sphere := SphereShape3D.new()
 	sphere.radius = 4.5
@@ -686,6 +851,14 @@ func _register_military_blocker(pos: Vector3, size: Vector3, yaw: float) -> void
 		"center": Vector2(pos.x, pos.z),
 		"half": Vector2(size.x * 0.5, size.z * 0.5),
 		"yaw": yaw,
+	})
+
+
+func _register_cover_zone(pos: Vector3, radius: float, multiplier: float) -> void:
+	_cover_zones.append({
+		"center": Vector2(pos.x, pos.z),
+		"radius": radius,
+		"multiplier": multiplier,
 	})
 
 

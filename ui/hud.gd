@@ -7,6 +7,9 @@ var _state_label: Label = null
 var _objective_list: VBoxContainer = null
 var _message_label: Label = null
 var _message_timer: Timer = null
+var _alarm_panel: Panel = null
+var _alarm_label: Label = null
+var _alarm_timer: Timer = null
 
 var _selection_box: Control = null
 
@@ -112,6 +115,39 @@ func _build_ui() -> void:
     add_child(_message_timer)
 
     # Selection box overlay
+    _selection_box = ColorRect.new()
+    _selection_box.color = Color(0.18, 0.74, 1.0, 0.18)
+    _selection_box.visible = false
+    _make_ignore_mouse(_selection_box)
+    add_child(_selection_box)
+
+    _alarm_panel = Panel.new()
+    _alarm_panel.anchor_left = 0.5
+    _alarm_panel.anchor_top = 0.0
+    _alarm_panel.anchor_right = 0.5
+    _alarm_panel.anchor_bottom = 0.0
+    _alarm_panel.offset_left = -110
+    _alarm_panel.offset_top = 54
+    _alarm_panel.offset_right = 110
+    _alarm_panel.offset_bottom = 92
+    _alarm_panel.visible = false
+    _make_ignore_mouse(_alarm_panel)
+    add_child(_alarm_panel)
+    _alarm_label = Label.new()
+    _alarm_label.text = "ALARMĂ"
+    _alarm_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    _alarm_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    _alarm_label.add_theme_color_override("font_color", Color(1.0, 0.18, 0.1))
+    _alarm_label.add_theme_font_size_override("font_size", 20)
+    _alarm_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 4)
+    _make_ignore_mouse(_alarm_label)
+    _alarm_panel.add_child(_alarm_label)
+
+    _alarm_timer = Timer.new()
+    _alarm_timer.one_shot = true
+    _alarm_timer.timeout.connect(_hide_alarm)
+    add_child(_alarm_timer)
+
 func update_selection(selected: Array[Node3D]) -> void:
     if selected.is_empty():
         _selection_label.text = "No selection"
@@ -164,8 +200,30 @@ func show_message(text: String, color: Color) -> void:
 func show_action_feedback(text: String, color: Color = Color.WHITE) -> void:
     show_message(text, color)
 
+func show_selection_box(from_pos: Vector2, to_pos: Vector2) -> void:
+    if _selection_box == null:
+        return
+    var rect := Rect2(from_pos, to_pos - from_pos).abs()
+    _selection_box.position = rect.position
+    _selection_box.size = rect.size
+    _selection_box.visible = rect.size.x >= 2.0 and rect.size.y >= 2.0
+
+func hide_selection_box() -> void:
+    if _selection_box != null:
+        _selection_box.visible = false
+
+func show_alarm(duration: float = 4.0) -> void:
+    if _alarm_panel == null or _alarm_timer == null:
+        return
+    _alarm_panel.visible = true
+    _alarm_timer.start(duration)
+
 func _hide_message() -> void:
     _message_label.visible = false
+
+func _hide_alarm() -> void:
+    if _alarm_panel != null:
+        _alarm_panel.visible = false
 
 func _ready_connection() -> void:
     pass

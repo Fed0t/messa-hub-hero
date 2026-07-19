@@ -6,6 +6,7 @@ extends Area3D
 @export var cooldown: float = 5.0
 
 var _cooldown_left := 0.0
+var _flash_left := 0.0
 var _beacon: MeshInstance3D = null
 var _beacon_mat: StandardMaterial3D = null
 var _light: OmniLight3D = null
@@ -50,12 +51,18 @@ func _ensure_sensor_shape() -> void:
 func _process(delta: float) -> void:
 	if _cooldown_left > 0.0:
 		_cooldown_left = maxf(0.0, _cooldown_left - delta)
-	var active_pulse := _cooldown_left > cooldown - 1.4
+	if _flash_left > 0.0:
+		_flash_left = maxf(0.0, _flash_left - delta)
+	var active_pulse := _flash_left > 0.0
 	var pulse := (sin(Time.get_ticks_msec() * 0.018) * 0.5 + 0.5) if active_pulse else 0.25
 	if _beacon_mat != null:
 		_beacon_mat.emission_energy_multiplier = 0.8 + pulse * 2.4
 	if _light != null:
 		_light.light_energy = 0.22 + pulse * 0.9
+
+
+func start_alarm_flash(duration: float = 3.2) -> void:
+	_flash_left = maxf(_flash_left, duration)
 
 
 func _on_body_entered(body: Node3D) -> void:
@@ -71,10 +78,15 @@ func _on_body_entered(body: Node3D) -> void:
 
 func _trigger_alarm() -> void:
 	_cooldown_left = cooldown
+	get_tree().call_group("alarm_triggers", "start_alarm_flash", 3.6)
+	get_tree().call_group("rotating_spotlights", "start_alarm_sweep", 7.0)
 	MissionManager.register_enemy_alert()
 	for node in get_tree().get_nodes_in_group("enemies"):
 		if not is_instance_valid(node) or not node is Enemy:
 			continue
 		var enemy := node as Enemy
 		if global_position.distance_to(enemy.global_position) <= alert_radius:
-			enemy.hear_noise(global_position)
+			if enemy.has_method("hear_alarm"):
+				enemy.hear_alarm(global_position)
+			else:
+				enemy.hear_noise(global_position)

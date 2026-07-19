@@ -14,9 +14,13 @@ const NAV_HALF := 60.0
 const NAV_STEP := 2.0
 const UNIT_NAV_Y_OFFSET := 1.0
 const UNIT_PICK_MASK := 1 << 1
+const DRAG_SELECT_THRESHOLD := 10.0
 var _extract_point := Vector3(34, 0, 20)
 var _eliminate_done := false
 var _extract_done := false
+var _drag_select_active := false
+var _drag_select_origin := Vector2.ZERO
+var _drag_select_current := Vector2.ZERO
 
 
 func _ready() -> void:
@@ -169,22 +173,23 @@ func _spawn_units() -> void:
 		c.global_position = Vector3(p.x, p.y + 1.0, p.z)
 		_commandos.append(c)
 
-	# gardieni departe de start (spre nord), fiecare cu o patrulă între 2 puncte
+	# Gardieni cu rute mai clare: pod, gard, bază și malul râului.
 	var guards := [
-		{"a": Vector3(12, 0, -2), "b": Vector3(26, 0, -2)},
-		{"a": Vector3(34, 0, -10), "b": Vector3(34, 0, 2)},
-		{"a": Vector3(2, 0, -14), "b": Vector3(16, 0, -14)},
+		{"points": [Vector3(11, 0, -4), Vector3(22, 0, -7), Vector3(30, 0, -3), Vector3(20, 0, 2)]},
+		{"points": [Vector3(-30, 0, -29), Vector3(-16, 0, -32), Vector3(-5, 0, -28), Vector3(-20, 0, -24)]},
+		{"points": [Vector3(2, 0, -18), Vector3(15, 0, -15), Vector3(28, 0, -11), Vector3(16, 0, -9)]},
+		{"points": [Vector3(36, 0, -7), Vector3(42, 0, 1), Vector3(38, 0, 9), Vector3(31, 0, 1)]},
 	]
 	for g in guards:
 		var e := Enemy.new()
 		add_child(e)
-		var pa := _find_land(g["a"])
-		var pb := _find_land(g["b"])
-		e.global_position = Vector3(pa.x, pa.y + 1.0, pa.z)
-		var pts: Array[Vector3] = [
-			Vector3(pa.x, pa.y + UNIT_NAV_Y_OFFSET, pa.z),
-			Vector3(pb.x, pb.y + UNIT_NAV_Y_OFFSET, pb.z),
-		]
+		var pts: Array[Vector3] = []
+		for raw_point in g["points"]:
+			var p := _find_land(raw_point)
+			pts.append(Vector3(p.x, p.y + UNIT_NAV_Y_OFFSET, p.z))
+		if pts.is_empty():
+			continue
+		e.global_position = pts[0]
 		e.set_patrol_points(pts)
 		if e._nav_agent != null:
 			e._nav_agent.target_desired_distance = 1.8
@@ -302,15 +307,44 @@ func _input(event: InputEvent) -> void:
 		return
 	if GameManager.current_state != GameManager.GameState.PLAYING:
 		return
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		var mouse_event := event as InputEventMouseButton
-		if mouse_event.double_click and _find_commando_under_mouse() != null:
+	if event is InputEventKey:
+		var key_event := event as InputEventKey
+		var is_select_all_key := key_event.physical_keycode == KEY_A or key_event.keycode == KEY_A
+		if key_event.pressed and not key_event.echo and (key_event.ctrl_pressed or key_event.meta_pressed) and is_select_all_key:
+			_cancel_drag_select()
 			_select_all_commandos(true)
-		else:
-			_handle_select()
+			get_viewport().set_input_as_handled()
+			return
+	if event is InputEventMouseMotion and _drag_select_active:
+		var motion_event := event as InputEventMouseMotion
+		_drag_select_current = motion_event.position
+		if _drag_select_origin.distance_to(_drag_select_current) >= DRAG_SELECT_THRESHOLD and _hud != null and _hud.has_method("show_selection_box"):
+			_hud.show_selection_box(_drag_select_origin, _drag_select_current)
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		var mouse_event := event as InputEventMouseButton
+		if mouse_event.pressed:
+			if mouse_event.double_click and _find_commando_under_mouse() != null:
+				_cancel_drag_select()
+				_select_all_commandos(true)
+			else:
+				_drag_select_active = true
+				_drag_select_origin = mouse_event.position
+				_drag_select_current = mouse_event.position
+				if _hud != null and _hud.has_method("hide_selection_box"):
+					_hud.hide_selection_box()
+		elif _drag_select_active:
+			_drag_select_current = mouse_event.position
+			if _drag_select_origin.distance_to(_drag_select_current) >= DRAG_SELECT_THRESHOLD:
+				_select_commandos_in_drag_rect()
+			else:
+				_handle_select()
+			_cancel_drag_select()
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+		_cancel_drag_select()
 		_handle_move()
 		get_viewport().set_input_as_handled()
 		return
@@ -332,12 +366,59 @@ func _handle_select() -> void:
 	var add_mode := Input.is_action_pressed("add_select")
 	var nearest := _find_commando_under_mouse()
 	if nearest != null:
-		if add_mode:
-			SelectionManager.add_to_selection(nearest)
-		else:
-			SelectionManager.select(nearest)
+		_apply_commando_selection([nearest], add_mode)
 	elif not add_mode:
 		SelectionManager.clear_selection()
+
+
+func _select_commandos_in_drag_rect() -> void:
+	var rect := Rect2(_drag_select_origin, _drag_select_current - _drag_select_origin).abs()
+	var units := _commandos_in_rect(rect)
+	var add_mode := Input.is_action_pressed("add_select")
+	if units.is_empty():
+		if not add_mode:
+			SelectionManager.clear_selection()
+		return
+	_apply_commando_selection(units, add_mode)
+
+
+func _commandos_in_rect(rect: Rect2) -> Array[Node3D]:
+	var result: Array[Node3D] = []
+	if _camera == null or _camera.get_camera() == null:
+		return result
+	var cam := _camera.get_camera()
+	for node in get_tree().get_nodes_in_group("commandos"):
+		if not is_instance_valid(node) or not node is Character:
+			continue
+		var ch: Character = node
+		if ch.current_state == Character.State.DEAD:
+			continue
+		var samples := [
+			ch.global_position + Vector3.UP * 0.25,
+			ch.global_position + Vector3.UP * 0.95,
+			ch.global_position + Vector3.UP * 1.7,
+		]
+		for sample in samples:
+			if cam.is_position_behind(sample):
+				continue
+			if rect.has_point(cam.unproject_position(sample)):
+				result.append(ch)
+				break
+	return result
+
+
+func _apply_commando_selection(units: Array[Node3D], add_mode: bool) -> void:
+	if add_mode:
+		for unit in units:
+			SelectionManager.add_to_selection(unit)
+	else:
+		SelectionManager.select_multiple(units)
+
+
+func _cancel_drag_select() -> void:
+	_drag_select_active = false
+	if _hud != null and _hud.has_method("hide_selection_box"):
+		_hud.hide_selection_box()
 
 
 func _find_commando_under_mouse() -> Node3D:
@@ -546,6 +627,8 @@ func _on_objective_updated(id: String, status: MissionManager.ObjectiveStatus) -
 
 func _on_enemy_alerted(count: int) -> void:
 	if _hud != null:
+		if _hud.has_method("show_alarm"):
+			_hud.show_alarm(3.5)
 		_hud.show_action_feedback("Inamic alertat (%d)" % count, Color(1.0, 0.45, 0.05))
 
 
@@ -569,12 +652,10 @@ func _select_starting_commandos() -> void:
 func _select_all_commandos(show_feedback: bool) -> void:
 	var starting: Array[Node3D] = []
 	for c in _commandos:
-		if is_instance_valid(c):
+		if is_instance_valid(c) and c is Character and (c as Character).current_state != Character.State.DEAD:
 			starting.append(c)
-	SelectionManager.select_multiple(starting)
+	_apply_commando_selection(starting, false)
 	if show_feedback and _hud != null:
-		_hud.show_action_feedback("Echipă selectată", Color(0.2, 0.8, 1.0))
-	elif _hud != null:
 		_hud.show_action_feedback("Echipă selectată", Color(0.2, 0.8, 1.0))
 
 

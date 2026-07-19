@@ -500,14 +500,17 @@ func get_noise_radius() -> float:
             return 0.0
 
 func get_visibility_factor() -> float:
-    # Base visibility factor; hiding spots can modify this externally
+    # Base visibility factor; world cover can lower it further.
+    var factor := 1.0
     match current_state:
         State.PRONE:
-            return 0.3
+            factor = 0.3
         State.CROUCH:
-            return 0.6
-        _:
-            return 1.0
+            factor = 0.6
+    var world := get_tree().current_scene
+    if world != null and world.has_method("cover_visibility_multiplier"):
+        factor *= float(world.cover_visibility_multiplier(global_position, current_state))
+    return factor
 
 func is_spotted() -> bool:
     return false

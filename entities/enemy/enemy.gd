@@ -9,6 +9,9 @@ enum AiState { PATROL, SEARCH, ALERT, ATTACK }
 @export var reaction_time: float = 1.0
 @export var alert_time: float = 2.0
 @export var search_time: float = 6.0
+@export var alarm_search_time: float = 11.0
+@export var alarm_vision_bonus: float = 4.0
+@export var alarm_boost_duration: float = 8.0
 @export var patrol_wait: float = 2.0
 @export var attack_range: float = 14.0
 @export var attack_damage: float = 12.0
@@ -28,6 +31,7 @@ var _alert_timer: float = 0.0
 var _search_timer: float = 0.0
 var _patrol_wait_timer: float = 0.0
 var _attack_cooldown_timer: float = 0.0
+var _alarm_timer: float = 0.0
 
 var _last_known_position: Vector3 = Vector3.ZERO
 var _suspicion_level: float = 0.0
@@ -146,6 +150,7 @@ func _physics_process(delta: float) -> void:
 
 func _update_timers(delta: float) -> void:
     _attack_cooldown_timer = max(0.0, _attack_cooldown_timer - delta)
+    _alarm_timer = max(0.0, _alarm_timer - delta)
     if _alert_indicator:
         _alert_indicator.visible = ai_state != AiState.PATROL
         var indicator_mat := _alert_indicator.material_override as StandardMaterial3D
@@ -166,6 +171,7 @@ func _scan_for_targets() -> void:
     _target_commando = null
     var best_candidate: Commando = null
     var best_suspicion := 0.0
+    var effective_range := _current_vision_range()
     for node in get_tree().get_nodes_in_group("commandos"):
         if not is_instance_valid(node) or not node is Commando:
             continue
@@ -173,7 +179,7 @@ func _scan_for_targets() -> void:
         if cmd.current_state == State.DEAD:
             continue
         var dist := global_position.distance_to(cmd.global_position)
-        if dist > vision_range:
+        if dist > effective_range:
             continue
         var to_target := (cmd.global_position - global_position).normalized()
         var forward := -global_transform.basis.z.normalized()
@@ -182,7 +188,7 @@ func _scan_for_targets() -> void:
             continue
         if not _has_line_of_sight(cmd.global_position + Vector3.UP * 1.0):
             continue
-        var suspicion := cmd.get_visibility_factor() * (1.0 - dist / vision_range)
+        var suspicion := cmd.get_visibility_factor() * (1.0 - dist / effective_range)
         if suspicion > best_suspicion:
             best_suspicion = suspicion
             best_candidate = cmd
@@ -248,7 +254,7 @@ func _process_search(delta: float) -> void:
     if _nav_agent.is_navigation_finished():
         _nav_agent.set_target_position(_last_known_position + Vector3(randf() - 0.5, 0, randf() - 0.5) * 4.0)
     _move_along_path(delta)
-    if _search_timer >= search_time:
+    if _search_timer >= _current_search_time():
         _search_timer = 0.0
         ai_state = AiState.PATROL
 
@@ -303,6 +309,25 @@ func hear_noise(noise_pos: Vector3) -> void:
     _last_known_position = noise_pos
     if ai_state == AiState.PATROL:
         ai_state = AiState.SEARCH
+
+func hear_alarm(alarm_pos: Vector3) -> void:
+    if ai_state == AiState.ATTACK or current_state == State.DEAD:
+        return
+    _last_known_position = alarm_pos
+    _search_timer = 0.0
+    _alarm_timer = maxf(_alarm_timer, alarm_boost_duration)
+    if ai_state == AiState.PATROL or ai_state == AiState.SEARCH:
+        ai_state = AiState.SEARCH
+
+func _current_vision_range() -> float:
+    if _alarm_timer > 0.0:
+        return vision_range + alarm_vision_bonus
+    return vision_range
+
+func _current_search_time() -> float:
+    if _alarm_timer > 0.0:
+        return alarm_search_time
+    return search_time
 
 func set_patrol_points(points: Array) -> void:
     patrol_points = points
