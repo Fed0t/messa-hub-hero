@@ -20,6 +20,7 @@ func _ensure_input_map() -> void:
     _add_key_action("rotate_right", KEY_E)
     _add_key_action("ability_knife", KEY_1)
     _add_key_action("ability_distract", KEY_2)
+    _add_key_action("ability_shoot", KEY_3)
     _add_key_action("toggle_crouch", KEY_C)
     _add_key_action("toggle_prone", KEY_P)
     _add_key_action("pause", KEY_ESCAPE)

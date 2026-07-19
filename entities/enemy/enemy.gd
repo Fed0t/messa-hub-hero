@@ -10,9 +10,9 @@ enum AiState { PATROL, SEARCH, ALERT, ATTACK }
 @export var alert_time: float = 2.0
 @export var search_time: float = 6.0
 @export var patrol_wait: float = 2.0
-@export var attack_range: float = 8.0
-@export var attack_damage: float = 15.0
-@export var attack_cooldown: float = 1.5
+@export var attack_range: float = 14.0
+@export var attack_damage: float = 12.0
+@export var attack_cooldown: float = 1.2
 @export var show_debug_vision: bool = true
 
 var ai_state: AiState = AiState.PATROL
@@ -86,7 +86,7 @@ func _create_cone_mesh(radius: float, angle_deg: float, segments: int) -> ArrayM
     # Apex at the guard: brightest here, fades to transparent at the far rim and
     # toward the angular edges, so the cone reads as a soft light gradient.
     verts.append(Vector3.ZERO)
-    colors.append(Color(1, 1, 1, 0.38))
+    colors.append(Color(1, 1, 1, 0.24))
     var half_rad := deg_to_rad(angle_deg * 0.5)
     for i in range(segments + 1):
         var t := float(i) / segments
@@ -96,7 +96,7 @@ func _create_cone_mesh(radius: float, angle_deg: float, segments: int) -> ArrayM
         verts.append(Vector3(x, 0.0, z))
         # Fade out at the tip (far) and soften the two side edges.
         var edge_fade: float = 1.0 - pow(abs(t * 2.0 - 1.0), 2.0)
-        colors.append(Color(1, 1, 1, 0.04 + 0.10 * edge_fade))
+        colors.append(Color(1, 1, 1, 0.02 + 0.06 * edge_fade))
     for i in range(1, segments + 1):
         indices.append(0)
         indices.append(i)
@@ -205,7 +205,7 @@ func _has_line_of_sight(target_pos: Vector3) -> bool:
     var query := PhysicsRayQueryParameters3D.new()
     query.from = global_position + Vector3.UP * 1.6
     query.to = target_pos
-    query.collision_mask = 1 | 3  # Ground + Obstacles
+    query.collision_mask = 1 | 4  # Ground + Obstacles
     query.collide_with_bodies = true
     query.collide_with_areas = false
     var result := world.intersect_ray(query)
@@ -278,6 +278,8 @@ func _process_attack(delta: float) -> void:
         current_state = State.IDLE
         _animate_character_visual(delta, false)
         if _attack_cooldown_timer <= 0.0:
+            var muzzle := global_position + Vector3(0.0, 1.4, 0.0) - global_transform.basis.z * 0.6
+            spawn_tracer(muzzle, _target_commando.global_position + Vector3(0.0, 1.2, 0.0), Color(1.0, 0.3, 0.2))
             _target_commando.take_damage(attack_damage)
             _attack_cooldown_timer = attack_cooldown
 
@@ -286,6 +288,7 @@ func _move_along_path(delta: float) -> void:
         current_state = State.IDLE
         return
     var next_pos := _nav_agent.get_next_path_position()
+    global_position.y = lerpf(global_position.y, next_pos.y, clamp(delta * 8.0, 0.0, 1.0))
     var direction := (next_pos - global_position).normalized()
     direction.y = 0.0
     if direction.length_squared() > 0.01:
@@ -325,13 +328,13 @@ func _get_vision_color() -> Color:
     # Additive tint for the vision cone; escalates with alert state (alpha scales intensity).
     match ai_state:
         AiState.SEARCH:
-            return Color(1.0, 0.78, 0.14, 0.5)
+            return Color(1.0, 0.78, 0.14, 0.34)
         AiState.ALERT:
-            return Color(1.0, 0.5, 0.08, 0.55)
+            return Color(1.0, 0.5, 0.08, 0.38)
         AiState.ATTACK:
-            return Color(1.0, 0.16, 0.1, 0.6)
+            return Color(1.0, 0.16, 0.1, 0.42)
         _:
-            return Color(0.86, 0.72, 0.32, 0.42)
+            return Color(0.86, 0.72, 0.32, 0.26)
 
 func to_dict() -> Dictionary:
     var data := super.to_dict()

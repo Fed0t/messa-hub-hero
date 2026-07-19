@@ -36,8 +36,9 @@ var _left_leg_pivot: Node3D = null
 var _right_leg_pivot: Node3D = null
 var _weapon_pivot: Node3D = null
 var _walk_phase := 0.0
-
-var _move_target: Vector3 = Vector3.ZERO
+var _vis_captured := false
+var _body_base := Vector3.ZERO
+var _head_base := Vector3.ZERO
 
 func _ready() -> void:
     health = max_health
@@ -52,13 +53,13 @@ func _setup_collision() -> void:
     match team:
         Team.PLAYER:
             collision_layer = 2  # Units
-            collision_mask = 1 | 3  # Ground + Obstacles
+            collision_mask = 1 | 4  # Ground + Obstacles
         Team.ENEMY:
             collision_layer = 2  # Units
-            collision_mask = 1 | 3
+            collision_mask = 1 | 4
         _:
             collision_layer = 2
-            collision_mask = 1 | 3
+            collision_mask = 1 | 4
     _collision_shape = CollisionShape3D.new()
     var capsule := CapsuleShape3D.new()
     capsule.radius = 0.38
@@ -75,7 +76,7 @@ func _setup_navigation() -> void:
     _nav_agent.radius = 0.4
     _nav_agent.max_speed = walk_speed
     _nav_agent.avoidance_enabled = true
-    _nav_agent.navigation_layers = 1 | 3
+    _nav_agent.navigation_layers = 1
     add_child(_nav_agent)
 
 func _setup_visuals() -> void:
@@ -110,7 +111,7 @@ func _setup_visuals() -> void:
     torus.outer_radius = 0.55
     _selection_ring.mesh = torus
     _selection_ring.position.y = 0.05
-    _selection_ring.visible = false
+    _selection_ring.visible = is_selected
     _selection_material = StandardMaterial3D.new()
     _selection_material.albedo_color = Color(0.15, 0.85, 1.0)
     _selection_material.emission_enabled = true
@@ -239,10 +240,61 @@ func _play_first_available_animation(keywords: Array[String]) -> void:
                 return
 
 func _animate_character_visual(delta: float, moving: bool) -> void:
-    if _model_root == null:
+    # animație procedurală de mers (modelele n-au clipuri de animație)
+    if _model_root != null:
+        if moving:
+            _walk_phase += delta * (4.0 + get_current_speed() * 1.6)
+            var bob := absf(sin(_walk_phase)) * 0.10
+            var sway := sin(_walk_phase * 0.5) * 4.0
+            _model_root.position = _model_base_position + Vector3(0.0, bob, 0.0)
+            _model_root.rotation_degrees = _model_base_rotation + Vector3(7.0, 0.0, sway)
+        else:
+            _walk_phase += delta * 1.4
+            var breathe := (sin(_walk_phase) * 0.5 + 0.5) * 0.02
+            _model_root.position = _model_base_position + Vector3(0.0, breathe, 0.0)
+            _model_root.rotation_degrees = _model_base_rotation
         return
-    _model_root.position = _model_base_position
-    _model_root.rotation_degrees = _model_base_rotation
+    # fallback pentru capsula procedurală (inamici): un bob pe corp/cap
+    if _body_mesh == null:
+        return
+    if not _vis_captured:
+        _body_base = _body_mesh.position
+        if _head_mesh != null:
+            _head_base = _head_mesh.position
+        _vis_captured = true
+    if moving:
+        _walk_phase += delta * (4.0 + get_current_speed() * 1.6)
+        var b := absf(sin(_walk_phase)) * 0.08
+        _body_mesh.position = _body_base + Vector3(0.0, b, 0.0)
+        if _head_mesh != null:
+            _head_mesh.position = _head_base + Vector3(0.0, b, 0.0)
+    else:
+        _body_mesh.position = _body_base
+        if _head_mesh != null:
+            _head_mesh.position = _head_base
+
+
+## Rază de tras vizibilă (tracer) de la `from` la `to`, dispare rapid.
+func spawn_tracer(from: Vector3, to: Vector3, color: Color = Color(1.0, 0.9, 0.4)) -> void:
+    var beam := MeshInstance3D.new()
+    var cyl := CylinderMesh.new()
+    cyl.top_radius = 0.025
+    cyl.bottom_radius = 0.025
+    cyl.height = from.distance_to(to)
+    var mat := StandardMaterial3D.new()
+    mat.albedo_color = color
+    mat.emission_enabled = true
+    mat.emission = color
+    mat.emission_energy_multiplier = 4.0
+    mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+    cyl.material = mat
+    beam.mesh = cyl
+    get_tree().current_scene.add_child(beam)
+    var mid := (from + to) * 0.5
+    beam.look_at_from_position(mid, to, Vector3.UP)
+    beam.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+    var t := get_tree().create_timer(0.06)
+    t.timeout.connect(beam.queue_free)
 
 func _animate_procedural_locomotion(moving: bool) -> void:
     if _left_arm_pivot == null:
@@ -333,7 +385,6 @@ func set_selected(selected: bool) -> void:
 func move_to(target: Vector3) -> void:
     if _nav_agent:
         _nav_agent.set_target_position(target)
-        _move_target = target
         current_state = State.MOVING
 
 func set_state(state: State) -> void:
@@ -419,33 +470,17 @@ func die() -> void:
 func _physics_process(delta: float) -> void:
     if current_state == State.DEAD or _nav_agent == null:
         return
-    if team == Team.PLAYER and current_state == State.MOVING:
-        _move_directly_to_target(delta)
-        return
     if _nav_agent.is_navigation_finished():
         if current_state == State.MOVING:
             current_state = State.IDLE
         _animate_character_visual(delta, false)
         return
     var next_pos := _nav_agent.get_next_path_position()
+    global_position.y = lerpf(global_position.y, next_pos.y, clamp(delta * 8.0, 0.0, 1.0))
     var direction := (next_pos - global_position).normalized()
     direction.y = 0.0
     if direction.length_squared() > 0.01:
         look_at(global_position + direction, Vector3.UP)
-    velocity = direction * get_current_speed()
-    move_and_slide()
-    _animate_character_visual(delta, true)
-
-func _move_directly_to_target(delta: float) -> void:
-    var direction := _move_target - global_position
-    direction.y = 0.0
-    if direction.length() <= 0.35:
-        velocity = Vector3.ZERO
-        current_state = State.IDLE
-        _animate_character_visual(delta, false)
-        return
-    direction = direction.normalized()
-    look_at(global_position + direction, Vector3.UP)
     velocity = direction * get_current_speed()
     move_and_slide()
     _animate_character_visual(delta, true)

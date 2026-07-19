@@ -11,7 +11,9 @@ var _commandos: Array[Node3D] = []
 var _world: Node = null
 
 const NAV_HALF := 60.0
-const NAV_STEP := 4.0
+const NAV_STEP := 2.0
+const UNIT_NAV_Y_OFFSET := 1.0
+const UNIT_PICK_MASK := 1 << 1
 var _extract_point := Vector3(34, 0, 20)
 var _eliminate_done := false
 var _extract_done := false
@@ -56,12 +58,59 @@ func _water_level() -> float:
 	return -1.3
 
 
-func _on_land(x: float, z: float) -> bool:
+func _clear_of_obstacles(x: float, z: float, padding: float = 1.3) -> bool:
+	if _world != null and _world.has_method("is_military_blocked"):
+		return not _world.is_military_blocked(x, z, padding)
+	return true
+
+
+func _on_bridge(x: float, z: float, padding: float = 0.0) -> bool:
+	if _world != null and _world.has_method("is_bridge_walkable"):
+		return _world.is_bridge_walkable(x, z, padding)
+	return false
+
+
+func _bridge_y(x: float, z: float) -> float:
+	if _world != null and _world.has_method("bridge_walk_y"):
+		return _world.bridge_walk_y(x, z)
+	return _terrain_height(x, z)
+
+
+func _on_land(x: float, z: float, obstacle_padding: float = 1.3) -> bool:
 	# uscat = departe de albia râului ȘI deasupra nivelului apei
 	var far_from_river := true
 	if _world != null and _world.has_method("river_dist"):
 		far_from_river = _world.river_dist(x, z) > 6.0
-	return far_from_river and _terrain_height(x, z) > _water_level() + 0.4
+	return far_from_river and _clear_of_obstacles(x, z, obstacle_padding) and _terrain_height(x, z) > _water_level() + 0.4
+
+
+func _walkable_height(x: float, z: float) -> float:
+	if _on_bridge(x, z, 0.4):
+		return _bridge_y(x, z)
+	return _terrain_height(x, z)
+
+
+func _is_walkable_point(x: float, z: float, bridge_padding: float = 0.0, obstacle_padding: float = 1.3) -> bool:
+	if not _clear_of_obstacles(x, z, obstacle_padding):
+		return false
+	if _on_bridge(x, z, bridge_padding):
+		return true
+	return _on_land(x, z, obstacle_padding)
+
+
+func _is_nav_cell_walkable(x0: float, z0: float) -> bool:
+	var x1 := x0 + NAV_STEP
+	var z1 := z0 + NAV_STEP
+	var center_x := x0 + NAV_STEP * 0.5
+	var center_z := z0 + NAV_STEP * 0.5
+	if not _is_walkable_point(center_x, center_z, 0.45, 1.2):
+		return false
+	return (
+		_is_walkable_point(x0, z0, 0.75, 0.55)
+		and _is_walkable_point(x1, z0, 0.75, 0.55)
+		and _is_walkable_point(x0, z1, 0.75, 0.55)
+		and _is_walkable_point(x1, z1, 0.75, 0.55)
+	)
 
 
 func _find_land(near: Vector3) -> Vector3:
@@ -91,15 +140,14 @@ func _build_navigation() -> void:
 		for xi in range(w):
 			var x := -NAV_HALF + xi * NAV_STEP
 			var z := -NAV_HALF + zi * NAV_STEP
-			verts.append(Vector3(x, _terrain_height(x, z) + 0.05, z))
+			verts.append(Vector3(x, _walkable_height(x, z) + UNIT_NAV_Y_OFFSET, z))
 	navmesh.vertices = verts
 	for zi in range(cols):
 		for xi in range(cols):
 			var x0 := -NAV_HALF + xi * NAV_STEP
 			var z0 := -NAV_HALF + zi * NAV_STEP
-			# sărim peste celulele care ating râul/apa -> navmesh doar pe uscat
-			if not (_on_land(x0, z0) and _on_land(x0 + NAV_STEP, z0)
-					and _on_land(x0, z0 + NAV_STEP) and _on_land(x0 + NAV_STEP, z0 + NAV_STEP)):
+			# sărim peste apă; peste râu acceptăm numai culoarul podului.
+			if not _is_nav_cell_walkable(x0, z0):
 				continue
 			var a := zi * w + xi
 			var b := zi * w + xi + 1
@@ -134,8 +182,8 @@ func _spawn_units() -> void:
 		var pb := _find_land(g["b"])
 		e.global_position = Vector3(pa.x, pa.y + 1.0, pa.z)
 		var pts: Array[Vector3] = [
-			Vector3(pa.x, pa.y + 0.05, pa.z),
-			Vector3(pb.x, pb.y + 0.05, pb.z),
+			Vector3(pa.x, pa.y + UNIT_NAV_Y_OFFSET, pa.z),
+			Vector3(pb.x, pb.y + UNIT_NAV_Y_OFFSET, pb.z),
 		]
 		e.set_patrol_points(pts)
 		if e._nav_agent != null:
@@ -159,66 +207,58 @@ func _setup_hud() -> void:
 
 
 func _setup_night() -> void:
-	# ambient nocturn cinematic: AgX, SDFGI (lumină indirectă), glow, umbre moi
+	# lumină de amurg: păstrează stealth-ul, dar ridică umbrele ca scena să fie lizibilă
 	var we := _world.get_node_or_null("WorldEnvironment")
 	if we != null and we.environment != null:
 		var env: Environment = we.environment
-		# tonemapping cinematic (nu mai strivește umbrele/lumina)
 		env.tonemap_mode = Environment.TONE_MAPPER_AGX
-		env.tonemap_exposure = 1.1
-		env.tonemap_white = 1.0
-		# cer nocturn — albastru profund, dar nu negru (dă și ambient)
-		env.background_energy_multiplier = 0.6
+		env.tonemap_exposure = 1.45
+		env.tonemap_white = 1.25
+		env.background_energy_multiplier = 1.05
 		if env.sky != null and env.sky.sky_material is ProceduralSkyMaterial:
 			var sm: ProceduralSkyMaterial = env.sky.sky_material
-			sm.sky_top_color = Color(0.04, 0.07, 0.16)
-			sm.sky_horizon_color = Color(0.1, 0.14, 0.24)
-			sm.ground_bottom_color = Color(0.03, 0.05, 0.09)
-			sm.ground_horizon_color = Color(0.08, 0.11, 0.18)
-		# ambient din cer + energie decentă -> umbrele devin albastre, nu negre
+			sm.sky_top_color = Color(0.18, 0.30, 0.48)
+			sm.sky_horizon_color = Color(0.46, 0.56, 0.66)
+			sm.ground_bottom_color = Color(0.18, 0.22, 0.18)
+			sm.ground_horizon_color = Color(0.34, 0.40, 0.34)
 		env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 		env.ambient_light_sky_contribution = 1.0
-		env.ambient_light_energy = 1.6
-		# SDFGI: lumină globală indirectă (bounce) -> umple umbrele, look profesionist
+		env.ambient_light_energy = 2.25
 		env.sdfgi_enabled = true
 		env.sdfgi_use_occlusion = true
-		env.sdfgi_bounce_feedback = 0.6
+		env.sdfgi_bounce_feedback = 0.72
 		env.sdfgi_cascades = 4
-		env.sdfgi_energy = 1.3
-		# glow subtil pe surse luminoase
+		env.sdfgi_energy = 1.75
 		env.glow_enabled = true
-		env.glow_intensity = 0.3
-		env.glow_strength = 0.9
+		env.glow_intensity = 0.22
+		env.glow_strength = 0.65
 		env.glow_bloom = 0.05
 		env.glow_hdr_threshold = 1.1
-		# ocluzie ambientală ușoară (umbre de contact, nu strivite)
 		env.ssao_enabled = true
-		env.ssao_intensity = 1.0
-		env.ssao_radius = 1.2
-		env.ssao_power = 1.5
-		# ceață atmosferică rece, subtilă
+		env.ssao_intensity = 0.45
+		env.ssao_radius = 0.9
+		env.ssao_power = 1.1
 		env.fog_enabled = true
-		env.fog_light_color = Color(0.22, 0.28, 0.44)
-		env.fog_light_energy = 0.7
-		env.fog_density = 0.0025
-		env.fog_aerial_perspective = 0.25
+		env.fog_light_color = Color(0.55, 0.63, 0.72)
+		env.fog_light_energy = 0.55
+		env.fog_density = 0.0012
+		env.fog_aerial_perspective = 0.14
 	var sun := _world.get_node_or_null("Sun")
 	if sun != null and sun is DirectionalLight3D:
 		var d: DirectionalLight3D = sun
-		# lună: rece, energie moderată, umbre MOI (nu tăioase)
-		d.light_energy = 0.85
-		d.light_color = Color(0.62, 0.72, 1.0)
-		d.rotation_degrees = Vector3(-52, 38, 0)
+		d.light_energy = 1.55
+		d.light_color = Color(0.86, 0.91, 1.0)
+		d.rotation_degrees = Vector3(-46, 34, 0)
 		d.shadow_enabled = true
-		d.shadow_opacity = 0.82
-		d.shadow_blur = 1.5
-		d.light_angular_distance = 1.8
+		d.shadow_opacity = 0.58
+		d.shadow_blur = 2.1
+		d.light_angular_distance = 2.2
 
 
 func _setup_rain() -> void:
 	var rain := GPUParticles3D.new()
 	rain.name = "Rain"
-	rain.amount = 1200
+	rain.amount = 650
 	rain.lifetime = 1.1
 	rain.local_coords = false
 	rain.position = Vector3(0, 26, 0)
@@ -232,9 +272,9 @@ func _setup_rain() -> void:
 	mat.emission_box_extents = Vector3(34, 1, 34)
 	rain.process_material = mat
 	var streak := BoxMesh.new()
-	streak.size = Vector3(0.02, 0.55, 0.02)
+	streak.size = Vector3(0.015, 0.42, 0.015)
 	var smat := StandardMaterial3D.new()
-	smat.albedo_color = Color(0.7, 0.8, 0.98, 0.5)
+	smat.albedo_color = Color(0.72, 0.82, 0.95, 0.32)
 	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	streak.material = smat
@@ -262,16 +302,26 @@ func _input(event: InputEvent) -> void:
 		return
 	if GameManager.current_state != GameManager.GameState.PLAYING:
 		return
-	if event.is_action_pressed("select"):
-		_handle_select()
-	elif event.is_action_pressed("move_to"):
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		var mouse_event := event as InputEventMouseButton
+		if mouse_event.double_click and _find_commando_under_mouse() != null:
+			_select_all_commandos(true)
+		else:
+			_handle_select()
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 		_handle_move()
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("toggle_crouch"):
 		_toggle_stance(Character.State.CROUCH)
 	if event.is_action_pressed("toggle_prone"):
 		_toggle_stance(Character.State.PRONE)
 	if event.is_action_pressed("ability_knife"):
 		_use_ability_knife()
+	if event.is_action_pressed("ability_shoot"):
+		_use_ability_shoot()
 	if event.is_action_pressed("ability_distract"):
 		_use_ability_distract()
 
@@ -293,29 +343,66 @@ func _handle_select() -> void:
 func _find_commando_under_mouse() -> Node3D:
 	if _camera == null or _camera.get_camera() == null:
 		return null
+	var hit := InputManager.raycast_mouse(_camera.get_camera(), UNIT_PICK_MASK)
+	if not hit.is_empty():
+		var picked := _commando_from_node(hit["collider"] as Node)
+		if picked != null:
+			return picked
+
 	var mouse_pos := get_viewport().get_mouse_position()
 	var nearest: Node3D = null
-	var nearest_dist := 40.0
+	var nearest_dist := 64.0
 	for node in get_tree().get_nodes_in_group("commandos"):
 		if not is_instance_valid(node) or not node is Character:
 			continue
 		var ch: Character = node
 		if ch.current_state == Character.State.DEAD:
 			continue
-		var screen_pos := ch.get_2d_screen_position(_camera.get_camera())
-		var dist := screen_pos.distance_to(mouse_pos)
+		var dist := _commando_screen_pick_distance(ch, mouse_pos)
 		if dist < nearest_dist:
 			nearest = ch
 			nearest_dist = dist
 	return nearest
 
 
+func _commando_from_node(node: Node) -> Node3D:
+	var current := node
+	while current != null:
+		if current is Commando:
+			var commando := current as Commando
+			if commando.current_state != Character.State.DEAD:
+				return commando
+			return null
+		current = current.get_parent()
+	return null
+
+
+func _commando_screen_pick_distance(ch: Character, mouse_pos: Vector2) -> float:
+	var cam := _camera.get_camera()
+	var samples := [
+		ch.global_position + Vector3.UP * 0.25,
+		ch.global_position + Vector3.UP * 0.95,
+		ch.global_position + Vector3.UP * 1.7,
+	]
+	var best := INF
+	for sample in samples:
+		if cam.is_position_behind(sample):
+			continue
+		best = minf(best, cam.unproject_position(sample).distance_to(mouse_pos))
+	return best
+
+
 func _handle_move() -> void:
 	var target := InputManager.get_terrain_mouse_position(_camera.get_camera(), 1)
 	if target == Vector3.ZERO:
 		return
+	if not _is_walkable_point(target.x, target.z, 0.65, 0.45):
+		if _hud != null:
+			_hud.show_action_feedback("Țintă inaccesibilă", Color(1.0, 0.72, 0.08))
+		return
+	target.y = _walkable_height(target.x, target.z) + UNIT_NAV_Y_OFFSET
 	SelectionManager.order_move(target)
-	_show_move_marker(target)
+	_show_move_marker(Vector3(target.x, target.y - UNIT_NAV_Y_OFFSET, target.z))
 	CursorManager.set_cursor(CursorManager.CursorType.MOVE)
 	if _hud != null:
 		_hud.show_action_feedback("Deplasare", Color(0.2, 0.8, 1.0))
@@ -346,6 +433,20 @@ func _use_ability_knife() -> void:
 			_hud.show_action_feedback("Eliminare cu cuțitul", Color(1.0, 0.25, 0.15))
 		else:
 			_hud.show_action_feedback("Niciun inamic în rază", Color(1.0, 0.85, 0.1))
+
+
+func _use_ability_shoot() -> void:
+	var used := false
+	for unit in SelectionManager.selected_units:
+		if not is_instance_valid(unit) or not unit is Commando:
+			continue
+		if (unit as Commando).try_shoot():
+			used = true
+	if _hud != null:
+		if used:
+			_hud.show_action_feedback("Foc!", Color(1.0, 0.7, 0.2))
+		else:
+			_hud.show_action_feedback("Niciun inamic la vedere", Color(1.0, 0.85, 0.1))
 
 
 func _use_ability_distract() -> void:
@@ -461,12 +562,19 @@ func _on_mission_failed(reason: String) -> void:
 
 
 func _select_starting_commandos() -> void:
+	await get_tree().process_frame
+	_select_all_commandos(false)
+
+
+func _select_all_commandos(show_feedback: bool) -> void:
 	var starting: Array[Node3D] = []
 	for c in _commandos:
 		if is_instance_valid(c):
 			starting.append(c)
 	SelectionManager.select_multiple(starting)
-	if _hud != null:
+	if show_feedback and _hud != null:
+		_hud.show_action_feedback("Echipă selectată", Color(0.2, 0.8, 1.0))
+	elif _hud != null:
 		_hud.show_action_feedback("Echipă selectată", Color(0.2, 0.8, 1.0))
 
 

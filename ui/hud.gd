@@ -50,7 +50,7 @@ func _build_ui() -> void:
     _make_ignore_mouse(_state_label)
     vbox.add_child(_state_label)
     var hint := Label.new()
-    hint.text = "1:Knife 2:Distract C:Crouch P:Prone"
+    hint.text = "1:Cuțit 2:Distract 3:Foc C:Ghemuit P:Culcat"
     hint.add_theme_font_size_override("font_size", 10)
     _make_ignore_mouse(hint)
     vbox.add_child(hint)
@@ -97,7 +97,7 @@ func _build_ui() -> void:
     help_label.offset_top = 8
     help_label.offset_right = -270
     help_label.offset_bottom = 46
-    help_label.text = "LMB select unit | RMB move | WASD/arrows camera | Q/E rotate | Wheel zoom | 1 Knife | 2 Distract"
+    help_label.text = "LMB selectezi | RMB miști | WASD cameră | Q/E rotire | Scroll zoom | 1 Cuțit | 2 Distract | 3 Foc"
     help_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     help_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     help_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

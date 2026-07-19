@@ -4,9 +4,9 @@ render_mode blend_mix, cull_disabled, depth_draw_never;
 // Apă pentru renderer-ul Forward+: estompare pe adâncime (margini line),
 // spumă la mal, refracție și reflexie fresnel.
 
-uniform vec3 shallow_color : source_color = vec3(0.30, 0.62, 0.62);
-uniform vec3 deep_color : source_color = vec3(0.03, 0.17, 0.30);
-uniform vec3 reflect_color : source_color = vec3(0.70, 0.85, 1.0);
+uniform vec3 shallow_color : source_color = vec3(0.36, 0.68, 0.66);
+uniform vec3 deep_color : source_color = vec3(0.08, 0.27, 0.39);
+uniform vec3 reflect_color : source_color = vec3(0.78, 0.92, 1.0);
 uniform float depth_fade : hint_range(0.2, 10.0) = 2.5;
 uniform float foam_dist : hint_range(0.0, 2.0) = 0.35;
 uniform float wave_speed = 0.35;
