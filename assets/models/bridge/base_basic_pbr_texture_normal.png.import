@@ -1,0 +1,44 @@
+[remap]
+
+importer="texture"
+type="CompressedTexture2D"
+uid="uid://c4ts4x70bpelw"
+path.s3tc="res://.godot/imported/base_basic_pbr_texture_normal.png-6190d49920f13f93663d27aa32ea3e9c.s3tc.ctex"
+metadata={
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
+}
+generator_parameters={
+"md5": "824907ed4655cb17ba279a7291ea5552"
+}
+
+[deps]
+
+source_file="res://assets/models/bridge/base_basic_pbr_texture_normal.png"
+dest_files=["res://.godot/imported/base_basic_pbr_texture_normal.png-6190d49920f13f93663d27aa32ea3e9c.s3tc.ctex"]
+
+[params]
+
+compress/mode=2
+compress/high_quality=false
+compress/lossy_quality=0.7
+compress/uastc_level=0
+compress/rdo_quality_loss=0.0
+compress/hdr_compression=1
+compress/normal_map=1
+compress/channel_pack=0
+mipmaps/generate=true
+mipmaps/limit=-1
+roughness/mode=1
+roughness/src_normal="res://assets/models/bridge/base_basic_pbr_texture_normal.png"
+process/channel_remap/red=0
+process/channel_remap/green=1
+process/channel_remap/blue=2
+process/channel_remap/alpha=3
+process/fix_alpha_border=true
+process/premult_alpha=false
+process/normal_map_invert_y=false
+process/hdr_as_srgb=false
+process/hdr_clamp_exposure=false
+process/size_limit=0
+detect_3d/compress_to=0
